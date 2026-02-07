@@ -1,61 +1,66 @@
-# Whatsapp Date Parsing from File Names
+# WhatsApp EXIF Tool
 
-## Problem
-When downloading files from WhatsApp and saving them to local storage, the files lack EXIF data.
+[![Forked from](https://img.shields.io/badge/forked%20from-icecore2%2Fwhatsapp--media--date--to--exif-blue)](https://github.com/icecore2/whatsapp-media-date-to-exif)
 
-## Solution
-WhatsApp photos are stored with sent date information in their filenames. This script parses that data and saves it as new EXIF data in the image files.
-
+Extract dates from WhatsApp media filenames and write them as EXIF metadata for proper date sorting in photo apps.
 
 ## Features
-- Parses WhatsApp filename date information
-- Saves parsed date as EXIF data in image files
-- Supports both images and videos
-- Offers recursive folder scanning
-- Provides overwrite option for existing files
+- Parses date from WhatsApp filenames (e.g., `IMG-20231225-WA0001.jpg`)
+- Writes `DateTimeOriginal` EXIF data to images (JPEG) and videos (MP4)
+- Recursive folder scanning with preserved directory structure
+- Verbose mode for debugging
 
-Screenshot
----
-![Screenshot](screenshots/1.jpg)
+## Installation
 
-## Prerequisites
-- Python 3.x installed on your system
-- Required Python dependencies: `pip install -r requirements.txt`
-- **For video support**: [ExifTool](https://exiftool.org/) must be installed and available in PATH
-
-### Arguments
-
-| Argument       | Required | Description                                           |
-|----------------|----------|-------------------------------------------------------|
-| `--input_path` | Yes      | Path to the folder containing WhatsApp media files    |
-| `--output_path`| Yes      | Path to save the processed media files                |
-| `--overwrite`  | No       | Overwrite existing files in the output path if present|
-| `--recursive`  | No       | Scan input folder recursively for media files         |
-
-Basic syntax:
-```commandline
-python main.py --input_path INPUT_PATH --output_path OUTPUT_PATH [OPTIONS]
+### Dependencies
+```bash
+pip install -r requirements.txt
 ```
+
+### Video Support (optional)
+| OS | Command |
+|----|---------|
+| Ubuntu/Debian | `sudo apt install libimage-exiftool-perl` |
+| macOS | `brew install exiftool` |
+| Windows | Download from [exiftool.org](https://exiftool.org/) |
+
+## Usage
+
+```bash
+python main.py --input_path <INPUT> --output_path <OUTPUT> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--input_path` | Source folder with WhatsApp media (required) |
+| `--output_path` | Destination folder for processed files (required) |
+| `--recursive` | Scan subfolders, preserving structure |
+| `--overwrite` | Overwrite existing files in output |
+| `--verbose, -v` | Enable debug logging |
+
 ### Examples
-Basic usage:
-```commandline
-python main.py --input_path /path/to/whatsapp/folder --output_path /path/to/output/folder
+
+**Basic:**
+```bash
+python main.py --input_path ~/WhatsApp/Media --output_path ~/Photos/WhatsApp
 ```
 
-With overwrite and recursive options:
-```commandline
-python main.py --input_path /path/to/whatsapp/folder --output_path /path/to/output/folder --overwrite --recursive
+**Recursive with overwrite:**
+```bash
+python main.py --input_path ~/WhatsApp --output_path ~/Photos --recursive --overwrite
 ```
 
-## Notes
-- Ensure you have necessary permissions to read from the input path and write to the output path.
-- The script will maintain the original file structure when using the recursive option.
-- Existing EXIF data in the files will be preserved, with the parsed date information added or updated.
+**Debug mode:**
+```bash
+python main.py --input_path ./images --output_path ./out --verbose
+```
 
-## Contributing
-Contributions are welcome! Please feel free to submit a Pull Request.
+## Supported Formats
+- Images: `.jpg`, `.jpeg`
+- Videos: `.mp4` (requires exiftool)
 
 ## License
-[MIT](https://choosealicense.com/licenses/mit/)
+[MIT](LICENSE)
 
-
+---
+*Forked from [icecore2/whatsapp-media-date-to-exif](https://github.com/icecore2/whatsapp-media-date-to-exif)*
