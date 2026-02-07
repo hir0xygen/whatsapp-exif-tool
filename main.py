@@ -3,6 +3,8 @@
 import logging
 import os
 import re
+import shutil
+import subprocess
 
 import piexif
 from halo import Halo
@@ -16,8 +18,9 @@ REGEX_FILENAME_DATE = r'(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})'
 REGEX_EXIF_DATE = r'((\d{4}):(\d{2}):(\d{2}))'
 REGEX_EXIF_TIME = r'((\d{2}):(\d{2}):(\d{2}))'
 FILES_EXT = ['jpeg', 'jpg', 'mp4']
+VIDEO_EXT = ['mp4']
+IMAGE_EXT = ['jpeg', 'jpg']
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +32,7 @@ class File:
     extension: str = ''
     parsed_date: str = ''
     exif_bytes: bytes = b''
+    relative_dir: str = ''  # Subdirectory path relative to input_path
 
     def __repr__(self):
         return f'Filename: {self.filename}'
@@ -42,33 +46,43 @@ def parse_arguments():
     parser.add_argument('--output_path', help='New Whatsapp Images and videos path to scan', required=True)
     parser.add_argument('--recursive', action='store_true', help='Run recursively in the provided folder')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing files in the output path')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose debug logging')
     args = parser.parse_args()
 
-    if not args:
-        raise Exception('Must provide arguments!')
+    # Configure logging based on verbose flag
+    log_level = logging.DEBUG if args.verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
     return args
 
 
 def get_files_from_path(path, recursive=False, output_path=''):
     files = []
-    if recursive:
-        file_paths = [os.path.join(root, file) for root, _, files in os.walk(path) for file in files]
-    else:
-        file_paths = [os.path.join(path, file) for file in os.listdir(path) if os.path.isfile(os.path.join(path, file))]
+    path = os.path.abspath(path)
     
-    for file_path in file_paths:
+    if recursive:
+        file_paths = [(os.path.join(root, file), root) for root, _, files_in_dir in os.walk(path) for file in files_in_dir]
+    else:
+        file_paths = [(os.path.join(path, file), path) for file in os.listdir(path) if os.path.isfile(os.path.join(path, file))]
+    
+    for file_path, root_dir in file_paths:
         filename = os.path.basename(file_path)
         extension = os.path.splitext(filename)[1][1:].lower()
         if extension in FILES_EXT:
-            new_file_path = os.path.join(output_path, filename) if output_path else ''
+            # Calculate relative directory from input path
+            relative_dir = os.path.relpath(root_dir, path)
+            if relative_dir == '.':
+                relative_dir = ''
+            
+            new_file_path = os.path.join(output_path, relative_dir, filename) if output_path else ''
             files.append(File(
                 filename=filename,
                 file_path=str(file_path),
                 new_file_path=new_file_path,
                 extension=extension,
                 parsed_date='',
-                exif_bytes=b''
+                exif_bytes=b'',
+                relative_dir=relative_dir
             ))
     
     return files
@@ -88,20 +102,21 @@ def export_exif_data(file: File):
 
 def check_exif(file: File):
     """
-    Check if a file has exif data.
-    :param file: File path.
-    :return: True if file has exif data, False otherwise.
+    Check if a file has EXIF date data (DateTimeOriginal or DateTimeDigitized).
+    :param file: File object with file_path.
+    :return: True if file has EXIF date data, False otherwise.
     """
     data = export_exif_data(file)
 
     if data:
+        # EXIF date format is "YYYY:MM:DD HH:MM:SS"
+        exif_date_pattern = r'\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}'
         for tag_id, value in data.items():
             if isinstance(value, bytes):
                 try:
                     decoded_value = value.decode('utf-8')
-                    match = re.search(re.compile(REGEX_FILENAME_DATE), decoded_value)
-                    if match:
-                        logger.info(f'Found exif data')
+                    if re.search(exif_date_pattern, decoded_value):
+                        logger.debug(f'Found EXIF date: {decoded_value}')
                         return True
                 except UnicodeDecodeError:
                     continue
@@ -124,45 +139,92 @@ def parse_filename_to_date(file):
             time_str = "00:00:00"
         
         file.parsed_date = f"{date_str} {time_str}"
-        logger.info(f'Parsed date and time from filename: {file.parsed_date}')
+        logger.debug(f'Parsed date: {file.parsed_date}')
     
     return file
 
 def new_image_exif_data(file):
     exif_dict = {'Exif': {}}
-    date_time = f"{file.parsed_date} 00:00:00"  # Add a default time
+    date_time = file.parsed_date
     exif_dict['Exif'] = {
         piexif.ExifIFD.DateTimeOriginal: date_time.encode('utf-8'),
         piexif.ExifIFD.DateTimeDigitized: date_time.encode('utf-8')
     }
-    logger.info(f'New exif data: {exif_dict}')
+    logger.debug(f'EXIF data created: {exif_dict}')
     exif_bytes = piexif.dump(exif_dict)
     file.exif_bytes = exif_bytes
     return file, exif_bytes
 
 
-def save_exif_data(file, img, output_path, overwrite):
-    os.makedirs(output_path, exist_ok=True)
-    new_file_path = os.path.join(output_path, file.filename)
+def check_exiftool():
+    """Check if exiftool is available on the system."""
+    return shutil.which('exiftool') is not None
+
+
+def save_video_exif_data(file, output_path, overwrite):
+    """Save EXIF data to video files using exiftool."""
+    target_dir = os.path.join(output_path, file.relative_dir) if file.relative_dir else output_path
+    os.makedirs(target_dir, exist_ok=True)
+    new_file_path = os.path.join(target_dir, file.filename)
+    
     if os.path.exists(new_file_path):
         if not overwrite:
-            return
-        else:
-            os.remove(new_file_path)
-        
-    base, ext = os.path.splitext(file.filename)
-    counter = 1
+            logger.debug(f"Skipping '{file.filename}' - already exists")
+            return None
+        os.remove(new_file_path)
+    
+    # Copy file to output location first
+    shutil.copy2(file.file_path, new_file_path)
+    
+    # Use exiftool to set the date metadata
+    cmd = [
+        'exiftool',
+        '-overwrite_original',
+        f'-CreateDate={file.parsed_date}',
+        f'-ModifyDate={file.parsed_date}',
+        f'-MediaCreateDate={file.parsed_date}',
+        f'-MediaModifyDate={file.parsed_date}',
+        new_file_path
+    ]
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        file.new_file_path = new_file_path
+        logger.debug(f"Video saved: {file.new_file_path}")
+        return file
+    except subprocess.CalledProcessError as e:
+        logger.error(f"exiftool failed: {e.stderr}")
+        os.remove(new_file_path)
+        return None
 
-    new_filename = f"{base}_{counter}{ext}"
-    new_file_path = os.path.join(output_path, new_filename)
-    counter += 1
+
+def save_exif_data(file, img, output_path, overwrite):
+    target_dir = os.path.join(output_path, file.relative_dir) if file.relative_dir else output_path
+    os.makedirs(target_dir, exist_ok=True)
+    new_file_path = os.path.join(target_dir, file.filename)
+    
+    if os.path.exists(new_file_path):
+        if not overwrite:
+            logger.debug(f"Skipping '{file.filename}' - already exists")
+            img.close()
+            return None
+        os.remove(new_file_path)
+    
     img.save(new_file_path, exif=file.exif_bytes)
     img.close()
     
     file.new_file_path = new_file_path
-    logger.info(f"'{file.new_file_path}' saved successfully")
+    logger.debug(f"Image saved: {file.new_file_path}")
     
-    assert check_exif(file), "New file doesn't have exif data."
+    # Verify using the new file path
+    saved_file = File(
+        filename=file.filename,
+        file_path=new_file_path,
+        new_file_path=new_file_path,
+        extension=file.extension
+    )
+    if not check_exif(saved_file):
+        logger.warning(f"Warning: EXIF verification failed for '{new_file_path}'")
 
     return file
 
@@ -187,26 +249,39 @@ def main():
 
 
 def process_file(file, args, spinner):
-    im = Image.open(file.file_path)
+    is_video = file.extension in VIDEO_EXT
     
-    if check_exif(file=file):
-        spinner.info(f"Skipping file: '{file.filename}'")
+    # For images, check existing EXIF; for videos, skip this check (exiftool handles it)
+    if not is_video and check_exif(file=file):
+        spinner.info(f"Skipping file: '{file.filename}' - already has EXIF date")
         return
 
     file = parse_filename_to_date(file=file)
-    if file.parsed_date is None:
+    if not file.parsed_date:
+        spinner.warn(f"Skipping file: '{file.filename}' - no date found in filename")
         return
 
-    file, exif = new_image_exif_data(file=file)
-    save_exif_data(
-        file=file,
-        img=im,
-        output_path=args.output_path,
-        overwrite=args.overwrite
-    )
+    if is_video:
+        if not check_exiftool():
+            spinner.fail(f"Skipping video '{file.filename}' - exiftool not installed")
+            return
+        result = save_video_exif_data(
+            file=file,
+            output_path=args.output_path,
+            overwrite=args.overwrite
+        )
+    else:
+        im = Image.open(file.file_path)
+        file, exif = new_image_exif_data(file=file)
+        result = save_exif_data(
+            file=file,
+            img=im,
+            output_path=args.output_path,
+            overwrite=args.overwrite
+        )
     
-    logger.info(file)
-    spinner.succeed(f"Processing complete on file: '{file.filename}'")
+    if result:
+        spinner.succeed(f"{file.filename} → {file.parsed_date}")
 
 
 if __name__ == '__main__':
