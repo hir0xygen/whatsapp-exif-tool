@@ -20,7 +20,8 @@ Screenshot
 
 ## Prerequisites
 - Python 3.x installed on your system
-- Required Python dependencies (list them here or include a `requirements.txt` file)
+- Required Python dependencies: `pip install -r requirements.txt`
+- **For video support**: [ExifTool](https://exiftool.org/) must be installed and available in PATH
 
 ### Arguments
 
